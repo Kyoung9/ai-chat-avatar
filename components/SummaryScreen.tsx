@@ -30,7 +30,7 @@ export default function SummaryScreen({
   onConfirm,
   onUpdateAnswer,
 }: SummaryScreenProps) {
-  const [countdown, setCountdown] = useState(10);
+  const [countdown, setCountdown] = useState(30);
   const [isPaused, setIsPaused] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -47,7 +47,7 @@ export default function SummaryScreen({
     // 편집 중이면 카운트다운 정지
     if (isPaused || editingIndex !== null) return;
 
-    // 10秒カウントダウン
+    // 30秒カウントダウン
     const timer = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
@@ -96,7 +96,7 @@ export default function SummaryScreen({
     setEditingIndex(null);
     setIsPaused(false);
     // 카운트다운 재시작
-    setCountdown(10);
+    setCountdown(30);
   };
 
   // 편집 취소
@@ -105,7 +105,7 @@ export default function SummaryScreen({
     setEditValue('');
     setIsPaused(false);
     // 카운트다운 재시작
-    setCountdown(10);
+    setCountdown(30);
   };
 
   return (

@@ -36,10 +36,11 @@ ${questionProgress}
 ${nextQuestionInfo}
 
 【対応ルール】
-1. 患者の回答が十分な場合 → nextQuestionId: "next"
+1. 患者の回答が十分な場合 → nextQuestionId: "next"で次の質問へ進む
 2. 追加情報が必要な場合 → 1つだけ追加質問、nextQuestionId: null
 3. 症状の質問では5W1H（いつ・どこ・何・きっかけ・程度）を確認
-4. 既に答えられた情報は再度聞かない
+4. 会話履歴で既に答えられた情報は再度聞かない（例：熱の温度を聞いた後に再度聞かない）
+【重要】会話履歴を必ず確認し、患者が既に答えた情報（熱の温度、いつから、症状など）は絶対に再度聞かないこと
 
 必ず以下のJSON形式で応答してください：
 {
@@ -52,7 +53,7 @@ ${nextQuestionInfo}
 例: {"reply": "ありがとうございます。次に、最近の睡眠時間について教えてください。", "emotion": "gentle", "nextQuestionId": "next", "isComplete": false}`;
 
   // 会話履歴が長すぎる場合は最新のものだけ保持 (토큰 제한 문제 방지)
-  const maxHistoryLength = 6; // 최근 6개 메시지만 유지 (user-assistant 3쌍)
+  const maxHistoryLength = 10; // 최근 10개 메시지만 유지 (user-assistant 5쌍) - 컨텍스트 증가
   const trimmedHistory = conversationHistory.length > maxHistoryLength
     ? conversationHistory.slice(-maxHistoryLength)
     : conversationHistory;
@@ -79,9 +80,21 @@ ${nextQuestionInfo}
   if (estimatedTokens > 3000) {
     console.warn('⚠️ Prompt too long! Estimated chars:', estimatedTokens);
   }
+ // 이미 얻은 정보를 요약해서 AI에게 알려줌
+ const alreadyAnswered: string[] = [];
+ for (let i = cleanedHistory.length - 1; i >= 0; i--) {
+   const msg = cleanedHistory[i];
+   if (msg.role === 'user' && msg.content.trim().length > 0) {
+     alreadyAnswered.push(msg.content);
+   }
+ }
+
+ const contextReminder = alreadyAnswered.length > 0
+   ? `\n\n【患者が既に答えた情報】\n${alreadyAnswered.slice(0, 3).join('\n')}\n上記の情報は再度聞かないこと。`
+   : '';
 
   const messages = [
-    { role: 'system', content: systemPrompt },
+    { role: 'system', content: systemPrompt+ contextReminder },
     ...cleanedHistory,
     { role: 'user', content: userAnswer },
   ];
@@ -107,7 +120,7 @@ ${nextQuestionInfo}
           model: 'gpt-4o-mini',
           messages: messages,
           temperature: 0.4,
-          max_tokens: 300, // 응답용 토큰 (JSON 응답은 짧음)
+          max_tokens: 1024, // 응답용 토큰 증가 (JSON 응답 + 여유)
           response_format: { type: 'json_object' },
         }),
       });
@@ -238,11 +251,15 @@ ${nextQuestionInfo}
 }
 
 // OpenAI TTS APIを使用して音声を生成・再生
-export async function speakText(text: string, apiKey: string): Promise<void> {
+export async function speakText(
+  text: string,
+  apiKey: string,
+  onPlayStart?: () => void
+): Promise<void> {
   try {
     if (!apiKey) {
       console.warn('OpenAI API key not found, falling back to Web Speech API');
-      return speakTextWithWebAPI(text);
+      return speakTextWithWebAPI(text, onPlayStart);
     }
 
     // OpenAI TTS API呼び出し
@@ -283,6 +300,12 @@ export async function speakText(text: string, apiKey: string): Promise<void> {
         reject(error);
       };
 
+      // 音声再生が実際に開始されたときのイベント
+      audio.onplay = () => {
+        console.log('Audio playback started');
+        onPlayStart?.();
+      };
+
       // 既存の音声を停止
       stopSpeaking();
 
@@ -299,12 +322,16 @@ export async function speakText(text: string, apiKey: string): Promise<void> {
   } catch (error) {
     console.error('OpenAI TTS エラー:', error);
     // フォールバック: Web Speech APIを使用
-    return speakTextWithWebAPI(text);
+    return speakTextWithWebAPI(text, onPlayStart);
   }
 }
 
 // ブラウザのWeb Speech APIを使用してTTSを再生（フォールバック）
-function speakTextWithWebAPI(text: string, lang: string = 'ja-JP'): Promise<void> {
+function speakTextWithWebAPI(
+  text: string,
+  onPlayStart?: () => void,
+  lang: string = 'ja-JP'
+): Promise<void> {
   return new Promise((resolve, reject) => {
     if (typeof window === 'undefined' || !window.speechSynthesis) {
       reject(new Error('Speech Synthesis APIがサポートされていません'));
@@ -320,9 +347,15 @@ function speakTextWithWebAPI(text: string, lang: string = 'ja-JP'): Promise<void
     utterance.onend = () => resolve();
     utterance.onerror = (error) => reject(error);
 
+    // 音声再生が開始されたときのイベント
+    utterance.onstart = () => {
+      console.log('Web Speech API playback started');
+      onPlayStart?.();
+    };
+
     // 既存の発話を停止
     window.speechSynthesis.cancel();
-    
+
     // 新しい発話を開始
     window.speechSynthesis.speak(utterance);
   });

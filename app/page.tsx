@@ -168,9 +168,11 @@ export default function Home() {
       setCurrentEmotion(aiResponse.emotion);
 
       // TTS再生
-      setIsTTSSpeaking(true);
       try {
-        await speakText(aiResponse.reply, apiKey);
+        await speakText(aiResponse.reply, apiKey, () => {
+          // 音声再生が実際に開始されたときに呼ばれる
+          setIsTTSSpeaking(true);
+        });
       } catch (error) {
         console.error('TTS error:', error);
       } finally {
@@ -311,8 +313,10 @@ export default function Home() {
     setCurrentEmotion('gentle');
 
     // TTS再生
-    setIsTTSSpeaking(true);
-    speakText(welcomeMessage.content, apiKey).finally(() => {
+    speakText(welcomeMessage.content, apiKey, () => {
+      // 音声再生が実際に開始されたときに呼ばれる
+      setIsTTSSpeaking(true);
+    }).finally(() => {
       setIsTTSSpeaking(false);
     });
   }
