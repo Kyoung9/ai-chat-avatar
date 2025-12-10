@@ -14,7 +14,7 @@ export function useSpeechRecognition({
   onResult,
   onError,
   language = 'ja-JP',
-  silenceTimeout = 1000,
+  silenceTimeout = 2000,
 }: UseSpeechRecognitionProps) {
   const [status, setStatus] = useState<STTStatus>('idle');
   const [transcript, setTranscript] = useState('');
@@ -110,7 +110,7 @@ export function useSpeechRecognition({
                   console.log('Recognition already stopped');
                 }
               }
-            }, 500);
+            }, 10);
           }, silenceTimeoutRef.current);
         };
 

@@ -6,7 +6,7 @@ import Link from 'next/link';
 import ChatInterface from '@/components/ChatInterface';
 import SummaryScreen from '@/components/SummaryScreen';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
-import { generateAIResponse, generateSummary, speakText, stopSpeaking } from '@/lib/openai';
+import { analyzeUserAnswer, generateAIResponse, generateSummary, speakText, stopSpeaking } from '@/lib/openai';
 import { saveSession, cleanExpiredSessions } from '@/lib/storage';
 import {
   ChatMessage,
@@ -31,8 +31,8 @@ export default function Home() {
   const [currentQuestionnaire, setCurrentQuestionnaire] = useState<Questionnaire | null>(null);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [showSummary, setShowSummary] = useState(false);
-  const [shouldAutoResume, setShouldAutoResume] = useState(false);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+  const [isWaitingForAI, setIsWaitingForAI] = useState(false);
 
   // OpenAI API Key
   const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY || '';
@@ -50,7 +50,7 @@ export default function Home() {
   const { status: sttStatus, transcript, start: startSTT, stop: stopSTT } = useSpeechRecognition({
     onResult: handleVoiceResult,
     language: 'ja-JP',
-    silenceTimeout: 1000,
+    silenceTimeout: 3000,
   });
 
   // 初期化：期限切れセッションを削除
@@ -66,30 +66,50 @@ export default function Home() {
         console.log('TTS開始、STTを停止');
         stopSTT();
       }
-      // TTS開始時に自動再開フラグを立てる
-      if (inputMode === 'voice') {
-        console.log('自動再開フラグをON');
-        setShouldAutoResume(true);
-      }
     }
-  }, [isTTSSpeaking, sttStatus, stopSTT, inputMode]);
-
-  // TTS終了後に自動再開（1回だけ）
-  useEffect(() => {
-    if (!isTTSSpeaking && shouldAutoResume && inputMode === 'voice' && isStarted) {
-      console.log('TTS終了、音声認識を自動再開します');
-      setShouldAutoResume(false); // フラグをクリア
-      const timer = setTimeout(() => {
-        console.log('音声認識を再開');
-        startSTT();
-      }, 800);
-      return () => clearTimeout(timer);
-    }
-  }, [isTTSSpeaking, shouldAutoResume, inputMode, isStarted, startSTT]);
+  }, [isTTSSpeaking, sttStatus, stopSTT]);
 
   function handleVoiceResult(transcript: string) {
     if (transcript.trim()) {
       handleSendMessage(transcript);
+    }
+  }
+
+  // 問診完了時の処理
+  async function handleCompleteQuestionnaire() {
+    const sessionToComplete = currentSession;
+    if (!sessionToComplete || !currentQuestionnaire) return;
+
+    setIsGeneratingSummary(true);
+
+    try {
+      // 요약 AI를 호출하여 전체 대화에서 각 질문에 맞는 답변 추출
+      const summaryResult = await generateSummary(
+        currentQuestionnaire.questions,
+        messages.map(m => ({ role: m.role, content: m.content })),
+        apiKey
+      );
+
+      const completedSession = {
+        ...sessionToComplete,
+        isCompleted: true,
+        formattedAnswers: summaryResult.formattedAnswers,
+        summary: summaryResult.summary,
+      };
+      setCurrentSession(completedSession);
+      saveSession(completedSession);
+    } catch (error) {
+      console.error('要約生成エラー:', error);
+      // 에러 시에도 세션 완료 처리
+      const completedSession = {
+        ...sessionToComplete,
+        isCompleted: true,
+      };
+      setCurrentSession(completedSession);
+      saveSession(completedSession);
+    } finally {
+      setIsGeneratingSummary(false);
+      setShowSummary(true);
     }
   }
 
@@ -100,6 +120,9 @@ export default function Home() {
     stopSpeaking();
     setIsTTSSpeaking(false);
 
+    // AI応答待機状態を設定
+    setIsWaitingForAI(true);
+
     // ユーザーメッセージを追加
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
@@ -107,15 +130,13 @@ export default function Home() {
       content,
       timestamp: Date.now(),
     };
-    
-    // メッセージを更新し、更新後のメッセージ配列を取得
-    let updatedMessages: ChatMessage[] = [];
-    setMessages(prev => {
-      updatedMessages = [...prev, userMessage];
-      return updatedMessages;
-    });
 
-    // セッションに答えを保存
+    // メッセージを更新し、更新後のメッセージ配列を取得
+    // setMessagesは非同期なので、直接配列を作成
+    const updatedMessages: ChatMessage[] = [...messages, userMessage];
+    setMessages(updatedMessages);
+
+    // セッションに答えを保存（現在の質問に対して）
     const currentQuestion = currentQuestionnaire.questions[currentQuestionIndex];
     let updatedSession: Session | null = null;
 
@@ -133,6 +154,7 @@ export default function Home() {
           },
         ],
         currentQuestionIndex: currentQuestionIndex,
+        answeredQuestionIds: currentSession.answeredQuestionIds || [],
       };
       setCurrentSession(updatedSession);
       saveSession(updatedSession);
@@ -141,20 +163,61 @@ export default function Home() {
     // AI応答を生成
     const totalQuestions = currentQuestionnaire.questions.length;
     const isLastQuestion = currentQuestionIndex >= totalQuestions - 1;
-    const nextQuestion = !isLastQuestion
-      ? currentQuestionnaire.questions[currentQuestionIndex + 1]
-      : null;
+
 
     try {
+      // 【1段階AI】ユーザーの回答を分析
+      const analysisResult = await analyzeUserAnswer(
+        content,
+        currentQuestionnaire.questions,
+        updatedSession?.answeredQuestionIds || [],
+        apiKey
+      );
+
+      console.log('【1段階AI】分析結果:', analysisResult);
+
+      // 分析結果をセッションに反映
+      if (analysisResult.answeredQuestions.length > 0 && updatedSession) {
+        const newAnsweredIds = [...(updatedSession.answeredQuestionIds || [])];
+
+        analysisResult.answeredQuestions.forEach(qId => {
+          if (!newAnsweredIds.includes(qId)) {
+            newAnsweredIds.push(qId);
+
+            // 現在の質問以外の質問に対する答えも保存
+            if (qId !== currentQuestion.id) {
+              const question = currentQuestionnaire.questions.find(q => q.id === qId);
+              if (question) {
+                updatedSession.answers.push({
+                  id: `${Date.now()}-${qId}`,
+                  questionId: qId,
+                  questionText: question.text,
+                  answer: content,
+                  timestamp: Date.now(),
+                });
+              }
+            }
+          }
+        });
+
+        updatedSession.answeredQuestionIds = newAnsweredIds;
+        setCurrentSession(updatedSession);
+        saveSession(updatedSession);
+
+        console.log('回答済み質問ID:', newAnsweredIds);
+      }
+
+      // 【2段階AI】対話を生成
+      const conversationHistory = updatedMessages.map(m => ({ role: m.role, content: m.content }));
       const aiResponse = await generateAIResponse(
         currentQuestion,
         content,
-        updatedMessages.map(m => ({ role: m.role, content: m.content })),
+        conversationHistory,
         apiKey,
-        currentQuestionIndex,
-        totalQuestions,
-        nextQuestion
+        isLastQuestion
       );
+
+      console.log('【2段階AI】応答:', aiResponse);
 
       // AIメッセージを追加
       const aiMessage: ChatMessage = {
@@ -177,57 +240,42 @@ export default function Home() {
         console.error('TTS error:', error);
       } finally {
         setIsTTSSpeaking(false);
+        setIsWaitingForAI(false);
       }
 
-      // 次の質問に進む、または問診完了
-      if (aiResponse.nextQuestionId) {
-        // 다음 질문으로 이동
-        setTimeout(() => {
-          if (!isLastQuestion) {
-            setCurrentQuestionIndex(prev => prev + 1);
-          }
-        }, 500);
+      // TTS再生完了後の処理
+      // 次の質問に進む判定
+      if (!aiResponse.needMoreInfo) {
+        // 追加情報が不要な場合、次の質問へ
+        const answeredIds = updatedSession?.answeredQuestionIds || [];
+
+        // 次の未回答質問を探す
+        let nextIndex = currentQuestionIndex + 1;
+        while (nextIndex < totalQuestions &&
+               answeredIds.includes(currentQuestionnaire.questions[nextIndex].id)) {
+          console.log(`質問 ${currentQuestionnaire.questions[nextIndex].id} は既に回答済み、スキップ`);
+          nextIndex++;
+        }
+
+        // すべての質問に回答済みかチェック
+        const allQuestionsAnswered = nextIndex >= totalQuestions;
+
+        if (allQuestionsAnswered) {
+          // すべての質問に回答済み → 要約生成
+          console.log('すべての質問に回答済み → 要約生成開始');
+          handleCompleteQuestionnaire();
+        } else {
+          // 次の質問へ移動
+          setTimeout(() => {
+            setCurrentQuestionIndex(nextIndex);
+          }, 500);
+        }
       }
 
       // 마지막 질문이고 isComplete가 true면 즉시 요약 생성
       if (isLastQuestion && aiResponse.isComplete) {
-        // TTS 완료 후 바로 요약 생성
-        setTimeout(async () => {
-          const sessionToComplete = updatedSession || currentSession;
-          if (sessionToComplete) {
-            setIsGeneratingSummary(true);
-
-            try {
-              // 요약 AI를 호출하여 전체 대화에서 각 질문에 맞는 답변 추출
-              const allMessages = [...updatedMessages, aiMessage];
-              const summaryResult = await generateSummary(
-                currentQuestionnaire.questions,
-                allMessages.map(m => ({ role: m.role, content: m.content })),
-                apiKey
-              );
-
-              const completedSession = {
-                ...sessionToComplete,
-                isCompleted: true,
-                formattedAnswers: summaryResult.formattedAnswers,
-                summary: summaryResult.summary,
-              };
-              setCurrentSession(completedSession);
-              saveSession(completedSession);
-            } catch (error) {
-              console.error('要約生成エラー:', error);
-              // 에러 시에도 세션 완료 처리
-              const completedSession = {
-                ...sessionToComplete,
-                isCompleted: true,
-              };
-              setCurrentSession(completedSession);
-              saveSession(completedSession);
-            } finally {
-              setIsGeneratingSummary(false);
-              setShowSummary(true);
-            }
-          }
+        setTimeout(() => {
+          handleCompleteQuestionnaire();
         }, 500);
       }
     } catch (error) {
@@ -241,6 +289,7 @@ export default function Home() {
         emotion: 'neutral',
       };
       setMessages(prev => [...prev, errorMessage]);
+      setIsWaitingForAI(false);
     }
   }
 
@@ -297,6 +346,7 @@ export default function Home() {
       answers: [],
       currentQuestionIndex: 0,
       isCompleted: false,
+      answeredQuestionIds: [], // 初期化
     };
     setCurrentSession(newSession);
     saveSession(newSession);
@@ -388,13 +438,11 @@ export default function Home() {
                 inputMode={inputMode}
                 sttStatus={sttStatus}
                 isTTSSpeaking={isTTSSpeaking}
+                isWaitingForAI={isWaitingForAI}
                 onSendMessage={handleSendMessage}
                 onModeChange={setInputMode}
                 onStartVoice={startSTT}
-                onStopVoice={() => {
-                  stopSTT();
-                  setShouldAutoResume(false); // 手動停止時は自動再開しない
-                }}
+                onStopVoice={stopSTT}
               />
             </div>
 

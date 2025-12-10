@@ -1,4 +1,4 @@
-import { LLMResponse, Question } from '@/types';
+import { LLMResponse, Question, AnalysisResponse } from '@/types';
 
 // 最大リトライ回数
 const MAX_RETRIES = 2;
@@ -8,49 +8,138 @@ const RETRY_DELAY = 1000;
 // 遅延ユーティリティ
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// OpenAI APIを使用してAI応答を生成
+// 【1段階AI】ユーザーの回答を分析し、どの質問に答えたかを判定
+export async function analyzeUserAnswer(
+  userAnswer: string,
+  allQuestions: Question[],
+  answeredQuestionIds: string[],
+  apiKey: string
+): Promise<AnalysisResponse> {
+  // 未回答の質問のみをリストアップ
+  const unansweredQuestions = allQuestions
+    .filter(q => !answeredQuestionIds.includes(q.id))
+    .map(q => `[ID: ${q.id}] ${q.text}`)
+    .join('\n');
+
+  const systemPrompt = `あなたは医療問診の回答分析の専門家です。
+患者の回答を分析し、どの質問に対する答えが含まれているかを判定してください。
+
+【未回答の質問リスト】
+${unansweredQuestions}
+
+【タスク】
+患者の回答から、上記の未回答質問に対する答えが含まれている場合、その質問IDをすべて抽出してください。
+
+【判定基準】
+- 明確に答えが含まれている質問のみを抽出
+- 推測や曖昧な情報は含めない
+- 例：「2時間しか寝れてない」→ 睡眠時間の質問に該当
+- 例：「頭痛と熱があります」→ 体調変化の質問に該当
+- 例：「食欲はあります」→ 食欲の質問に該当
+
+必ず以下のJSON形式で応答してください：
+{
+  "answeredQuestions": ["Q1", "Q2"]
+}
+
+answeredQuestionsが空の場合は空配列を返してください：
+{
+  "answeredQuestions": []
+}`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `患者の回答: ${userAnswer}` },
+        ],
+        temperature: 0.1, // 低温度で一貫性を確保
+        max_tokens: 200,
+        response_format: { type: 'json_object' },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const aiText = data.choices[0].message.content;
+    const parsed = JSON.parse(aiText);
+
+    console.log('【1段階AI】分析結果:', parsed);
+
+    return {
+      answeredQuestions: parsed.answeredQuestions || [],
+    };
+  } catch (error) {
+    console.error('【1段階AI】分析エラー:', error);
+    // エラー時は空配列を返す
+    return {
+      answeredQuestions: [],
+    };
+  }
+}
+
+// 【2段階AI】対話を生成（単純化版）
 export async function generateAIResponse(
   currentQuestion: Question,
   userAnswer: string,
   conversationHistory: { role: string; content: string }[],
   apiKey: string,
-  currentQuestionIndex?: number,
-  totalQuestions?: number,
-  nextQuestion?: Question | null
+  isLastQuestion: boolean
 ): Promise<LLMResponse> {
-  const questionProgress = currentQuestionIndex !== undefined && totalQuestions !== undefined
-    ? `\n現在の進行状況: ${currentQuestionIndex + 1}問目 / 全${totalQuestions}問`
-    : '';
-
-  const isLastQuestion = currentQuestionIndex !== undefined && totalQuestions !== undefined
-    && currentQuestionIndex >= totalQuestions - 1;
-
-  const nextQuestionInfo = nextQuestion
-    ? `\n次の質問: 「${nextQuestion.text}」`
-    : '';
-
-  const systemPrompt = `あなたは医療問診アシスタントです。患者に優しく丁寧に対応してください。
+  // 単純化されたプロンプト
+  const systemPrompt = `あなたは優しい医療問診アシスタントです。
 
 現在の質問: ${currentQuestion.text}
-${questionProgress}
-${nextQuestionInfo}
 
-【対応ルール】
-1. 患者の回答が十分な場合 → nextQuestionId: "next"で次の質問へ進む
-2. 追加情報が必要な場合 → 1つだけ追加質問、nextQuestionId: null
-3. 症状の質問では5W1H（いつ・どこ・何・きっかけ・程度）を確認
-4. 会話履歴で既に答えられた情報は再度聞かない（例：熱の温度を聞いた後に再度聞かない）
-【重要】会話履歴を必ず確認し、患者が既に答えた情報（熱の温度、いつから、症状など）は絶対に再度聞かないこと
+【あなたの役割】
+1. 患者の回答に対して、優しく丁寧に応答する
+2. 症状に関する質問では、詳細情報（各症状の開始時期、他の症状、程度、場所）を確認する
+3. 十分な情報が得られたかを判断する
+
+【重要】症状が複数ある場合の対応:
+- 複数の症状がある場合、「それぞれいつ頃から感じていますか？」と聞く
+- 例: 「頭痛と熱があるのですね。それぞれいつ頃から感じていますか？」
+- 患者が「頭痛は2週間前から、熱は昨日から」のように答えた場合、各症状の時期を確認
+
+【応答ルール】
+- 症状の質問: 基本情報を得た後、各症状の「いつから」「他の症状」「場所」を確認
+- その他の質問: 明確な答えが得られたら次へ進む
+- 追加情報が必要な場合: needMoreInfo = true
+- 十分な情報が得られた場合: needMoreInfo = false
 
 必ず以下のJSON形式で応答してください：
 {
-  "reply": "具体的な日本語の応答文（空白禁止）",
+  "reply": "患者への応答文",
   "emotion": "gentle",
-  "nextQuestionId": ${isLastQuestion ? 'null' : '"next" または null'},
+  "needMoreInfo": true または false,
   "isComplete": ${isLastQuestion ? 'true または false' : 'false'}
 }
 
-例: {"reply": "ありがとうございます。次に、最近の睡眠時間について教えてください。", "emotion": "gentle", "nextQuestionId": "next", "isComplete": false}`;
+例1（複数症状の詳細確認）:
+患者「頭痛と熱があります」
+→ {"reply": "頭痛と熱があるのですね。それぞれいつ頃から感じていますか？", "emotion": "gentle", "needMoreInfo": true, "isComplete": false}
+
+例2（各症状の時期を確認）:
+患者「頭痛は2週間前から、熱は昨日からです」
+→ {"reply": "頭痛は2週間前から、熱は昨日からなのですね。他に気になる症状はありますか？", "emotion": "gentle", "needMoreInfo": true, "isComplete": false}
+
+例3（十分な情報を得た）:
+患者「他の症状はありません」
+→ {"reply": "わかりました。ありがとうございます。", "emotion": "gentle", "needMoreInfo": false, "isComplete": false}
+
+例4（その他の質問）:
+患者「食欲はあります」
+→ {"reply": "食欲があるのですね。わかりました。", "emotion": "gentle", "needMoreInfo": false, "isComplete": false}`;
 
   // 会話履歴が長すぎる場合は最新のものだけ保持 (토큰 제한 문제 방지)
   const maxHistoryLength = 10; // 최근 10개 메시지만 유지 (user-assistant 5쌍) - 컨텍스트 증가
@@ -70,8 +159,6 @@ ${nextQuestionInfo}
       role: msg.role,
       content: msg.content.length > 200 ? msg.content.substring(0, 200) + '...' : msg.content
     }));
-
-  console.log('Conversation history length:', cleanedHistory.length);
   const estimatedTokens = JSON.stringify(systemPrompt).length +
     JSON.stringify(cleanedHistory).length +
     JSON.stringify(userAnswer).length;
@@ -211,10 +298,12 @@ ${nextQuestionInfo}
           continue;
         }
 
+        console.log('【2段階AI】応答:', parsed);
+
         return {
           reply: parsed.reply,
           emotion: parsed.emotion || 'gentle',
-          nextQuestionId: parsed.nextQuestionId,
+          needMoreInfo: parsed.needMoreInfo !== undefined ? parsed.needMoreInfo : true,
           isComplete: parsed.isComplete || false,
         } as LLMResponse;
       } catch (e) {
@@ -245,7 +334,7 @@ ${nextQuestionInfo}
   return {
     reply: '申し訳ございません。通信エラーが発生しました。もう一度お願いできますか？',
     emotion: 'gentle',
-    nextQuestionId: undefined,
+    needMoreInfo: true,
     isComplete: false,
   };
 }
@@ -403,16 +492,22 @@ export async function generateSummary(
 
 【重要な注意事項】
 - 患者は質問の順番通りに回答していない場合があります
+- 患者は一度の回答で複数の質問に答えている場合があります
+  例：「最近 2時間しか寝れてなくて頭痛と熱があります」
+  → 睡眠時間（2時間）、症状（頭痛、発熱）の情報が含まれる
 - 会話全体の文脈から、各質問に最も適切な回答を見つけてください
 - 回答が見つからない質問には「回答なし」と記載してください
 - 挨拶や関係のない発言は無視してください
 - 同じ質問に対して複数回の応答がある場合（追加質問で詳細を聞いた場合）、すべての情報を統合して簡潔にまとめてください
 
 【回答のフォーマットルール】
-- 回答は簡潔に、キーワードや要点のみを抽出してください
-- 長い説明は避け、箇条書き風にまとめてください
-- 例：「発熱39度、昨日から、体のだるさあり、他の症状なし」
-- 例：「10時間」「週3回ジム通い」「ストレスなし」
+- 回答は簡潔に、テーブル形式でまとめてください
+- 症状に関する質問の場合、各症状と開始時期を分けて記載
+- 例（症状）:
+  「頭痛: 2週間前から
+  発熱: 昨日から (38度)
+  倦怠感: 3日前から」
+- 例（その他）: 「2時間」「週3回ジム通い」「ストレスなし」
 - 「よろしくお願いします」などの挨拶は除外してください
 
 【質問リスト】

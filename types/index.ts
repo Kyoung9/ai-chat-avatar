@@ -58,14 +58,21 @@ export interface Session {
   // 요약 AI가 생성한 포맷팅된 답변
   formattedAnswers?: FormattedAnswer[];
   summary?: string;
+  // 既に回答された質問IDのリスト（一度の回答で複数質問に答えた場合も含む）
+  answeredQuestionIds?: string[];
 }
 
-// LLM応答フォーマット
+// LLM応答フォーマット（2段階AI用に単純化）
 export interface LLMResponse {
   reply: string;
   emotion: EmotionType;
-  nextQuestionId?: string;
-  isComplete?: boolean;
+  needMoreInfo: boolean; // 追加情報が必要かどうか
+  isComplete?: boolean; // 問診全体が完了したかどうか
+}
+
+// 1段階AI: 答変分析の応答フォーマット
+export interface AnalysisResponse {
+  answeredQuestions: string[]; // この回答で答えられた質問IDのリスト
 }
 
 // チャットメッセージ

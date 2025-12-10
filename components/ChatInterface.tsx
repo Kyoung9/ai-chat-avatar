@@ -8,6 +8,7 @@ interface ChatInterfaceProps {
   inputMode: InputMode;
   sttStatus: STTStatus;
   isTTSSpeaking: boolean;
+  isWaitingForAI: boolean;
   onSendMessage: (message: string) => void;
   onModeChange: (mode: InputMode) => void;
   onStartVoice: () => void;
@@ -19,6 +20,7 @@ export default function ChatInterface({
   inputMode,
   sttStatus,
   isTTSSpeaking,
+  isWaitingForAI,
   onSendMessage,
   onModeChange,
   onStartVoice,
@@ -29,21 +31,25 @@ export default function ChatInterface({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const previousMessagesLengthRef = useRef(0);
 
   // メッセージが追加されたら自動スクロール
   useEffect(() => {
-    if (messages.length === 0) return;
-    
+    // メッセージ数が変わった時のみスクロール（TTS状態変更では無視）
+    if (messages.length === 0 || messages.length === previousMessagesLengthRef.current) return;
+
+    previousMessagesLengthRef.current = messages.length;
+
     // DOM更新後にスクロールを実行
     const scrollToBottom = () => {
       const container = messagesContainerRef.current;
       if (!container) return;
-      
+
       // scrollTopを直接設定（最も確実な方法）
       const maxScroll = container.scrollHeight - container.clientHeight;
       container.scrollTop = maxScroll > 0 ? maxScroll : container.scrollHeight;
     };
-    
+
     // 複数のタイミングで実行して確実にスクロール
     // 1. requestAnimationFrameでDOM更新を待つ
     requestAnimationFrame(() => {
@@ -51,12 +57,12 @@ export default function ChatInterface({
         scrollToBottom();
       });
     });
-    
+
     // 2. 少し遅延させてもう一度実行（画像やレイアウト変更に対応）
     const timeoutId = setTimeout(() => {
       scrollToBottom();
     }, 150);
-    
+
     return () => clearTimeout(timeoutId);
   }, [messages]);
 
@@ -100,7 +106,7 @@ export default function ChatInterface({
       case 'silenceDetected':
         return (
           <div className="flex items-center gap-2 px-3 py-2 bg-yellow-100 text-yellow-700 rounded-lg">
-            <span className="text-sm font-medium">…入力終了を検出しています（3秒）</span>
+            <span className="text-sm font-medium">…入力終了を検出しています</span>
           </div>
         );
       case 'processing':
@@ -145,19 +151,21 @@ export default function ChatInterface({
         </div>
       </div>
 
-      {/* ステータスバッジ */}
-      {(sttStatus !== 'idle' || isTTSSpeaking) && (
-        <div className="px-6 py-3 bg-gray-50 border-b">
-          {isTTSSpeaking ? (
-            <div className="flex items-center gap-2 px-3 py-2 bg-gray-200 text-gray-700 rounded-lg">
-              <span className="text-lg">🔇</span>
-              <span className="text-sm font-medium">アバター発話中です</span>
-            </div>
-          ) : (
-            getSTTStatusBadge()
-          )}
-        </div>
-      )}
+      {/* ステータスバッジ - 高さ固定でレイアウトシフト防止 */}
+      <div className="px-6 py-3 bg-gray-50 border-b min-h-[60px] flex items-center">
+        {(sttStatus !== 'idle' || isTTSSpeaking) && (
+          <>
+            {isTTSSpeaking ? (
+              <div className="flex items-center gap-2 px-3 py-2 bg-gray-200 text-gray-700 rounded-lg">
+                <span className="text-lg">🔇</span>
+                <span className="text-sm font-medium">アバター発話中です</span>
+              </div>
+            ) : (
+              getSTTStatusBadge()
+            )}
+          </>
+        )}
+      </div>
 
       {/* メッセージリスト */}
       <div 
@@ -204,11 +212,11 @@ export default function ChatInterface({
               placeholder="メッセージを入力してください..."
               className="flex-1 px-4 py-3 border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-[#0066CC] focus:border-transparent"
               rows={2}
-              disabled={isTTSSpeaking}
+              disabled={isTTSSpeaking || isWaitingForAI}
             />
             <button
               onClick={handleSend}
-              disabled={!inputText.trim() || isComposing || isTTSSpeaking}
+              disabled={!inputText.trim() || isComposing || isTTSSpeaking || isWaitingForAI}
               className="px-6 py-3 gradient-primary text-white rounded-lg font-medium hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
             >
               送信
@@ -221,7 +229,7 @@ export default function ChatInterface({
             </p>
             <button
               onClick={sttStatus === 'idle' ? onStartVoice : onStopVoice}
-              disabled={isTTSSpeaking}
+              disabled={isTTSSpeaking || isWaitingForAI}
               className={`px-8 py-4 rounded-full font-medium transition-all ${
                 sttStatus === 'listening'
                   ? 'bg-red-500 text-white hover:bg-red-600'

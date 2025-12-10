@@ -208,13 +208,18 @@ export default function SummaryScreen({
                             ? 'bg-gray-100'
                             : 'bg-blue-50'
                         }`}>
-                          <p className={`${
+                          <div className={`${
                             answer.extractedAnswer === '回答なし'
                               ? 'text-gray-500 italic'
                               : 'text-gray-800'
                           }`}>
-                            {answer.extractedAnswer}
-                          </p>
+                            {/* 改行を保持して表示（テーブル形式対応） */}
+                            {answer.extractedAnswer.split('\n').map((line, i) => (
+                              <div key={i} className={i > 0 ? 'mt-1' : ''}>
+                                {line || '\u00A0'}
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>
