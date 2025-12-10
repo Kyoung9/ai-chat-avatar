@@ -31,6 +31,8 @@ export async function generateAIResponse(
 
   const systemPrompt = `あなたは医療問診を担当する優しい女性アシスタントです。
 患者さんに対して丁寧で親しみやすい日本語で対応してください。
+
+【重要】必ず有意味な日本語の文章で応答してください。空白や記号だけの応答は絶対に禁止です。
 ${questionProgress}
 
 現在の質問: ${currentQuestion.text}
@@ -38,17 +40,30 @@ ${questionProgress}
 ${nextQuestionInfo}
 
 【症状ヒアリングの5W1Hフレームワーク】
-症状に関する質問（例：体調の変化、痛み、不調など）の場合、以下の5つの観点で情報を収集してください：
+症状に関する質問（例：体調の変化、痛み、不調など）の場合、以下の5つの観点で情報を収集してください（症状により適切な指標が異なる）：
 - When（いつ）：いつから始まった？どのくらいの期間続いている？
-- Where（どこ）：どの部位に症状がある？
+- Where（どこ）：どの部位に症状がある？（※全身症状の場合は不要）
 - What（何が）：具体的にどんな症状？（痛い、だるい、かゆいなど）
-- Why/Trigger（きっかけ）：何をすると悪化する？何をすると改善する？
-- How much（程度）：症状の強さは？（0〜10のスケールで）
+- Why/Trigger（きっかけ）：何をすると悪化する？何をすると改善する？（※わからない場合はスキップ可）
+- How much（程度）：症状の程度を確認（症状により適切な指標が異なる）
+
+【How muchの聞き方 - 症状別ガイド】
+※すでに数値や程度が回答されている場合は、再度聞かないこと！
+- 発熱：「○○度」と体温が答えられていれば完了。未回答なら「何度くらいですか？」
+- 痛み：0〜10のスケールで確認。「どのくらい痛いですか？」
+- 倦怠感・だるさ：「日常生活に支障はありますか？」「動けないほどですか？」
+- 咳・くしゃみ：「頻度はどのくらいですか？」
+- 吐き気・嘔吐：「実際に吐きましたか？何回くらい？」
+- 下痢：「1日何回くらいですか？」
+- かゆみ：「我慢できる程度ですか？眠れないほどですか？」
 
 【情報収集の進め方】
 1. 患者の回答から、上記5項目のどれが既に回答されたかを判断してください
-2. まだ回答されていない項目があれば、優しく1つずつ追加で質問してください
-3. 症状に関係ない質問（睡眠時間、運動習慣など）は5W1Hを適用せず、回答が得られたら次へ進んでください
+2. 既に答えられた情報は二度と聞かないでください（例：38度と言われたら程度は確認済み）
+3. まだ回答されていない項目があれば、優しく1つずつ追加で質問してください
+4. 「わからない」「特にない」という回答は有効な回答として扱い、次の項目に進んでください
+5. 症状に関係ない質問（睡眠時間、運動習慣など）は5W1Hを適用せず、回答が得られたら次へ進んでください
+6. すべての関連項目が埋まったら、次の質問に進んでください
 
 【重要なルール】
 1. 回答が十分かどうかを判断してください
@@ -65,13 +80,17 @@ ${nextQuestionInfo}
    - 例：「ありがとうございます。痛みの強さを0〜10で表すと、どのくらいですか？」
    - nextQuestionIdはnullのままにしてください
 
-【応答形式】JSON形式で応答してください：
+【応答形式】必ず以下のJSON形式で応答してください。replyフィールドには必ず有意味な日本語の文章を含めてください：
 {
-  "reply": "応答メッセージ（確認＋${isLastQuestion ? '感謝の言葉' : '次の質問を直接含める、または不足情報の追加質問'}）",
+  "reply": "応答メッセージ（確認＋${isLastQuestion ? '感謝の言葉' : '次の質問を直接含める、または不足情報の追加質問'}）。必ず具体的な日本語の文章で記述すること。",
   "emotion": "neutral | gentle | thinking | serious | happy",
   "nextQuestionId": ${isLastQuestion ? 'null' : '"next"（回答が十分な場合）またはnull（不十分な場合）'},
   "isComplete": ${isLastQuestion ? 'true（回答が十分な場合）またはfalse' : 'false'}
-}`;
+}
+
+【応答例】
+良い例: {"reply": "38度の発熱ですね。いつ頃から熱が出始めましたか？", "emotion": "gentle", "nextQuestionId": null, "isComplete": false}
+悪い例: {"reply": "   ", "emotion": "gentle", "nextQuestionId": null, "isComplete": false} ← 絶対に禁止`;
 
   // 会話履歴が長すぎる場合は最新のものだけ保持
   const maxHistoryLength = 20;
@@ -79,9 +98,17 @@ ${nextQuestionInfo}
     ? conversationHistory.slice(-maxHistoryLength)
     : conversationHistory;
 
+  // 회화 히스토리에서 공백만 있는 메시지 필터링
+  const cleanedHistory = trimmedHistory.filter(msg => {
+    const cleaned = msg.content
+      .replace(/[\r\n\t\f\v\u0020\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/g, ' ')
+      .trim();
+    return cleaned.length > 0;
+  });
+
   const messages = [
     { role: 'system', content: systemPrompt },
-    ...trimmedHistory,
+    ...cleanedHistory,
     { role: 'user', content: userAnswer },
   ];
 
@@ -105,8 +132,9 @@ ${nextQuestionInfo}
         body: JSON.stringify({
           model: 'gpt-4o-mini',
           messages: messages,
-          temperature: 0.3,
-          max_tokens: 1024,
+          temperature: 0.4,
+          max_tokens: 512,
+          min_tokens: 5, // 최소 토큰 수 설정으로 너무 짧은 응답 방지
           response_format: { type: 'json_object' },
         }),
       });
@@ -146,29 +174,49 @@ ${nextQuestionInfo}
         continue;
       }
 
-      // 공백만 있는 응답 체크
-      const cleanedText = aiText.trim().replace(/[\n\r\s]+/g, ' ').trim();
-      if (!cleanedText || cleanedText.length < 2) {
+      // 공백만 있는 응답 체크 (모든 종류의 공백 문자 제거)
+      const cleanedText = aiText
+        .replace(/[\r\n\t\f\v\u0020\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/g, '')
+        .trim();
+
+      if (!cleanedText || cleanedText.length < 5) {
         console.error('OpenAI API가 공백만 있는 응답을 반환함:', {
-          original: aiText,
+          original: JSON.stringify(aiText),
+          originalLength: aiText.length,
           cleaned: cleanedText,
-          finishReason: data.choices[0].finish_reason
+          cleanedLength: cleanedText.length,
+          finishReason: data.choices[0].finish_reason,
+          charCodes: Array.from(aiText.slice(0, 50)).map(c => c.charCodeAt(0))
         });
         lastError = new Error('Whitespace-only response from API');
         continue;
       }
 
-      // JSON形式の応答をパース
+      // JSON形式の応답をパース
       try {
         // JSON 부분만 추출 시도
-        const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
-        const jsonText = jsonMatch ? jsonMatch[0] : cleanedText;
+        const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+        const jsonText = jsonMatch ? jsonMatch[0] : aiText;
         const parsed = JSON.parse(jsonText);
 
         // 필수 필드 검증
         if (!parsed.reply || typeof parsed.reply !== 'string') {
           console.error('응답에 reply 필드가 없음:', parsed);
           lastError = new Error('Missing reply field in response');
+          continue;
+        }
+
+        // reply 필드도 공백만 있는지 체크
+        const replyClean = parsed.reply
+          .replace(/[\r\n\t\f\v\u0020\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/g, ' ')
+          .trim();
+
+        if (!replyClean || replyClean.length < 2) {
+          console.error('reply 필드가 공백만 포함:', {
+            original: parsed.reply,
+            cleaned: replyClean
+          });
+          lastError = new Error('Reply field contains only whitespace');
           continue;
         }
 
@@ -181,8 +229,8 @@ ${nextQuestionInfo}
       } catch (e) {
         console.error('Failed to parse AI response as JSON:', {
           error: e,
-          originalText: aiText,
-          cleanedText: cleanedText,
+          originalText: aiText.slice(0, 200),
+          cleanedText: cleanedText.slice(0, 200),
         });
         lastError = e as Error;
         continue;
