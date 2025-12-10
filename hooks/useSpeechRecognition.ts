@@ -22,9 +22,9 @@ export function useSpeechRecognition({
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastTranscriptRef = useRef('');
   const isActiveRef = useRef(false); // 認識が有効かどうかを追跡
-  const accumulatedFinalRef = useRef(''); // 확정된 텍스트 누적 저장
+  const accumulatedFinalRef = useRef(''); // 確定テキストを累積
 
-  // 콜백과 설정값을 ref로 관리하여 useEffect 재실행 방지
+  // コールバックと設定値をrefで管理し、useEffect 再実行防止
   const onResultRef = useRef(onResult);
   const onErrorRef = useRef(onError);
   const silenceTimeoutRef = useRef(silenceTimeout);
@@ -52,7 +52,7 @@ export function useSpeechRecognition({
           console.log('音声認識開始');
           setStatus('listening');
           isActiveRef.current = true;
-          accumulatedFinalRef.current = ''; // 시작 시 누적 초기화
+          accumulatedFinalRef.current = ''; // 初期化
         };
 
         recognition.onresult = (event: any) => {
@@ -60,23 +60,22 @@ export function useSpeechRecognition({
 
           let interimTranscript = '';
 
-          // 모든 결과를 순회하여 확정된 것과 중간 결과를 분리
+          // すべての結果を処理
           for (let i = 0; i < event.results.length; i++) {
             const result = event.results[i];
             const text = result[0].transcript;
 
             if (result.isFinal) {
-              // 확정된 결과는 누적 (이전에 처리하지 않은 것만)
+              // 確定結果累積
               if (i >= event.resultIndex) {
                 accumulatedFinalRef.current += text;
               }
             } else {
-              // 중간 결과
+              // 中間結果
               interimTranscript += text;
             }
           }
 
-          // 현재 전체 텍스트 = 누적된 확정 텍스트 + 현재 중간 결과
           const currentTranscript = accumulatedFinalRef.current + interimTranscript;
           console.log('認識結果:', currentTranscript);
           setTranscript(currentTranscript);
@@ -102,7 +101,7 @@ export function useSpeechRecognition({
                 onResultRef.current(lastTranscriptRef.current.trim());
                 setTranscript('');
                 lastTranscriptRef.current = '';
-                accumulatedFinalRef.current = ''; // 전송 후 누적 초기화
+                accumulatedFinalRef.current = ''; // 初期化
                 isActiveRef.current = false;
                 setStatus('idle');
                 try {

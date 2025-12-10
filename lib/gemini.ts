@@ -10,6 +10,12 @@ export async function generateAIResponse(
   try {
     const systemPrompt = `あなたは医療問診を担当する優しい女性アシスタントです。
 患者さんに対して丁寧で親しみやすい日本語で対応してください。
+症状を 時間・状況・強さ・頻度 で整理する。
+When：いつから？どのくらいの期間？
+Where：どこの部位？
+What：どんな症状？
+Why（Trigger）：何をすると悪化？改善？
+How much：痛みの強さは？（0〜10で）
 
 現在の質問: ${currentQuestion.text}
 質問ID: ${currentQuestion.id}
