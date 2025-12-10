@@ -68,12 +68,14 @@ ${currentQuestion.options ? `選択肢: ${currentQuestion.options.join(', ')}` :
 
     const data = await response.json();
     const aiText = data.candidates[0].content.parts[0].text;
+    console.log('Gemini raw response:', aiText);
 
     // JSON形式の応答をパース
     try {
       const jsonMatch = aiText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
+        console.log('Gemini parsed response:', parsed);
         return parsed as LLMResponse;
       }
     } catch (e) {
@@ -147,4 +149,3 @@ export function stopSpeaking(): void {
     window.speechSynthesis.cancel();
   }
 }
-

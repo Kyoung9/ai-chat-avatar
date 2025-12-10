@@ -42,6 +42,7 @@ export default function SummaryScreen({
   // 포맷팅된 답변이 있으면 사용, 없으면 기존 답변 사용
   const hasFormattedAnswers = localAnswers.length > 0;
 
+  // 카운트다운 타이머
   useEffect(() => {
     // 편집 중이면 카운트다운 정지
     if (isPaused || editingIndex !== null) return;
@@ -50,8 +51,6 @@ export default function SummaryScreen({
     const timer = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
-          clearInterval(timer);
-          onConfirm(); // 自動的に確認
           return 0;
         }
         return prev - 1;
@@ -59,7 +58,14 @@ export default function SummaryScreen({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [onConfirm, isPaused, editingIndex]);
+  }, [isPaused, editingIndex]);
+
+  // 카운트다운이 0이 되면 onConfirm 호출
+  useEffect(() => {
+    if (countdown === 0) {
+      onConfirm();
+    }
+  }, [countdown, onConfirm]);
 
   // 편집 시작
   const handleStartEdit = (index: number, currentAnswer: string) => {

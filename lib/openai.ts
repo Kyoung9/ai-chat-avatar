@@ -29,82 +29,56 @@ export async function generateAIResponse(
     ? `\n次の質問: 「${nextQuestion.text}」`
     : '';
 
-  const systemPrompt = `あなたは医療問診を担当する優しい女性アシスタントです。
-患者さんに対して丁寧で親しみやすい日本語で対応してください。
-
-【重要】必ず有意味な日本語の文章で応答してください。空白や記号だけの応答は絶対に禁止です。
-${questionProgress}
+  const systemPrompt = `あなたは医療問診アシスタントです。患者に優しく丁寧に対応してください。
 
 現在の質問: ${currentQuestion.text}
-質問ID: ${currentQuestion.id}
+${questionProgress}
 ${nextQuestionInfo}
 
-【症状ヒアリングの5W1Hフレームワーク】
-症状に関する質問（例：体調の変化、痛み、不調など）の場合、以下の5つの観点で情報を収集してください（症状により適切な指標が異なる）：
-- When（いつ）：いつから始まった？どのくらいの期間続いている？
-- Where（どこ）：どの部位に症状がある？（※全身症状の場合は不要）
-- What（何が）：具体的にどんな症状？（痛い、だるい、かゆいなど）
-- Why/Trigger（きっかけ）：何をすると悪化する？何をすると改善する？（※わからない場合はスキップ可）
-- How much（程度）：症状の程度を確認（症状により適切な指標が異なる）
+【対応ルール】
+1. 患者の回答が十分な場合 → nextQuestionId: "next"
+2. 追加情報が必要な場合 → 1つだけ追加質問、nextQuestionId: null
+3. 症状の質問では5W1H（いつ・どこ・何・きっかけ・程度）を確認
+4. 既に答えられた情報は再度聞かない
 
-【How muchの聞き方 - 症状別ガイド】
-※すでに数値や程度が回答されている場合は、再度聞かないこと！
-- 発熱：「○○度」と体温が答えられていれば完了。未回答なら「何度くらいですか？」
-- 痛み：0〜10のスケールで確認。「どのくらい痛いですか？」
-- 倦怠感・だるさ：「日常生活に支障はありますか？」「動けないほどですか？」
-- 咳・くしゃみ：「頻度はどのくらいですか？」
-- 吐き気・嘔吐：「実際に吐きましたか？何回くらい？」
-- 下痢：「1日何回くらいですか？」
-- かゆみ：「我慢できる程度ですか？眠れないほどですか？」
-
-【情報収集の進め方】
-1. 患者の回答から、上記5項目のどれが既に回答されたかを判断してください
-2. 既に答えられた情報は二度と聞かないでください（例：38度と言われたら程度は確認済み）
-3. まだ回答されていない項目があれば、優しく1つずつ追加で質問してください
-4. 「わからない」「特にない」という回答は有効な回答として扱い、次の項目に進んでください
-5. 症状に関係ない質問（睡眠時間、運動習慣など）は5W1Hを適用せず、回答が得られたら次へ進んでください
-6. すべての関連項目が埋まったら、次の質問に進んでください
-
-【重要なルール】
-1. 回答が十分かどうかを判断してください
-   - 症状に関する質問：5W1Hの必要な項目が埋まっているか確認
-   - それ以外の質問：質問に対する直接的な回答があるか確認
-2. 回答が十分な場合：
-   - 短く確認の返事をした後、すぐに次の質問をしてください
-   - 必ず「次の質問に進みます」などと言わず、直接次の質問をしてください
-   - nextQuestionIdを必ず"next"に設定してください
-   ${isLastQuestion ? '- これが最後の質問なので、isCompleteをtrueに設定してください' : ''}
-3. 回答が不十分な場合：
-   - 不足している情報を1つ選んで、優しく追加質問をしてください
-   - 例：「なるほど、頭が痛いのですね。いつ頃から痛み始めましたか？」
-   - 例：「ありがとうございます。痛みの強さを0〜10で表すと、どのくらいですか？」
-   - nextQuestionIdはnullのままにしてください
-
-【応答形式】必ず以下のJSON形式で応答してください。replyフィールドには必ず有意味な日本語の文章を含めてください：
+必ず以下のJSON形式で応答してください：
 {
-  "reply": "応答メッセージ（確認＋${isLastQuestion ? '感謝の言葉' : '次の質問を直接含める、または不足情報の追加質問'}）。必ず具体的な日本語の文章で記述すること。",
-  "emotion": "neutral | gentle | thinking | serious | happy",
-  "nextQuestionId": ${isLastQuestion ? 'null' : '"next"（回答が十分な場合）またはnull（不十分な場合）'},
-  "isComplete": ${isLastQuestion ? 'true（回答が十分な場合）またはfalse' : 'false'}
+  "reply": "具体的な日本語の応答文（空白禁止）",
+  "emotion": "gentle",
+  "nextQuestionId": ${isLastQuestion ? 'null' : '"next" または null'},
+  "isComplete": ${isLastQuestion ? 'true または false' : 'false'}
 }
 
-【応答例】
-良い例: {"reply": "38度の発熱ですね。いつ頃から熱が出始めましたか？", "emotion": "gentle", "nextQuestionId": null, "isComplete": false}
-悪い例: {"reply": "   ", "emotion": "gentle", "nextQuestionId": null, "isComplete": false} ← 絶対に禁止`;
+例: {"reply": "ありがとうございます。次に、最近の睡眠時間について教えてください。", "emotion": "gentle", "nextQuestionId": "next", "isComplete": false}`;
 
-  // 会話履歴が長すぎる場合は最新のものだけ保持
-  const maxHistoryLength = 20;
+  // 会話履歴が長すぎる場合は最新のものだけ保持 (토큰 제한 문제 방지)
+  const maxHistoryLength = 6; // 최근 6개 메시지만 유지 (user-assistant 3쌍)
   const trimmedHistory = conversationHistory.length > maxHistoryLength
     ? conversationHistory.slice(-maxHistoryLength)
     : conversationHistory;
 
-  // 회화 히스토리에서 공백만 있는 메시지 필터링
-  const cleanedHistory = trimmedHistory.filter(msg => {
-    const cleaned = msg.content
-      .replace(/[\r\n\t\f\v\u0020\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/g, ' ')
-      .trim();
-    return cleaned.length > 0;
-  });
+  // 회화 히스토리에서 공백만 있는 메시지 필터링 및 길이 제한
+  const cleanedHistory = trimmedHistory
+    .filter(msg => {
+      const cleaned = msg.content
+        .replace(/[\r\n\t\f\v\u0020\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+/g, ' ')
+        .trim();
+      return cleaned.length > 0;
+    })
+    .map(msg => ({
+      role: msg.role,
+      content: msg.content.length > 200 ? msg.content.substring(0, 200) + '...' : msg.content
+    }));
+
+  console.log('Conversation history length:', cleanedHistory.length);
+  const estimatedTokens = JSON.stringify(systemPrompt).length +
+    JSON.stringify(cleanedHistory).length +
+    JSON.stringify(userAnswer).length;
+  console.log('Total prompt chars (estimated):', estimatedTokens);
+
+  if (estimatedTokens > 3000) {
+    console.warn('⚠️ Prompt too long! Estimated chars:', estimatedTokens);
+  }
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -133,8 +107,7 @@ ${nextQuestionInfo}
           model: 'gpt-4o-mini',
           messages: messages,
           temperature: 0.4,
-          max_tokens: 512,
-          min_tokens: 5, // 최소 토큰 수 설정으로 너무 짧은 응답 방지
+          max_tokens: 300, // 응답용 토큰 (JSON 응답은 짧음)
           response_format: { type: 'json_object' },
         }),
       });
@@ -166,6 +139,9 @@ ${nextQuestionInfo}
       }
 
       const aiText = data.choices[0].message.content;
+      console.log('OpenAI raw response:', aiText);
+      console.log('OpenAI raw response length:', aiText?.length);
+      console.log('OpenAI finish_reason:', data.choices[0].finish_reason);
 
       // 빈 응답 체크
       if (!aiText || typeof aiText !== 'string') {
@@ -181,12 +157,12 @@ ${nextQuestionInfo}
 
       if (!cleanedText || cleanedText.length < 5) {
         console.error('OpenAI API가 공백만 있는 응답을 반환함:', {
-          original: JSON.stringify(aiText),
+          original: JSON.stringify(aiText.substring(0, 100)),
           originalLength: aiText.length,
           cleaned: cleanedText,
           cleanedLength: cleanedText.length,
           finishReason: data.choices[0].finish_reason,
-          charCodes: Array.from(aiText.slice(0, 50)).map(c => c.charCodeAt(0))
+          charCodes: Array.from(aiText.slice(0, 20)).map(c => `${c}(${c.charCodeAt(0)})`).join(' ')
         });
         lastError = new Error('Whitespace-only response from API');
         continue;
@@ -205,6 +181,8 @@ ${nextQuestionInfo}
           lastError = new Error('Missing reply field in response');
           continue;
         }
+
+        console.log('OpenAI parsed response:', parsed);
 
         // reply 필드도 공백만 있는지 체크
         const replyClean = parsed.reply
@@ -449,8 +427,10 @@ ${questionsInfo}
 
     const data = await response.json();
     const aiText = data.choices[0].message.content;
+    console.log('OpenAI summary raw response:', aiText);
 
     const parsed = JSON.parse(aiText);
+    console.log('OpenAI summary parsed response:', parsed);
     return parsed as SummaryResponse;
   } catch (error) {
     console.error('要約生成エラー:', error);
